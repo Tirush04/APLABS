@@ -1,0 +1,6 @@
+{
+  "name": "DC STR Advisor",
+  "description": "Short-term rental pricing and revenue advisory platform for Washington, DC residential properties, computed from Inside Airbnb market data.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
