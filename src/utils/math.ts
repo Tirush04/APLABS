@@ -46,6 +46,17 @@ export function formatCurrency(amount: number, decimals: number = 0): string {
   }).format(amount);
 }
 
+export function formatDiff(diff: number, decimals: number = 0): string {
+  if (isNaN(diff) || diff === null || diff === undefined) return '$0';
+  const rounded = Math.round(diff * 100) / 100;
+  if (rounded === 0) return '$0';
+  const absFormatted = formatCurrency(Math.abs(diff), decimals);
+  if (diff < 0) {
+    return `−${absFormatted}`; // real unicode minus sign U+2212
+  }
+  return `+${absFormatted}`;
+}
+
 export function formatPercent(decimal: number, decimals: number = 1): string {
   if (isNaN(decimal) || decimal === null || decimal === undefined) return '0%';
   return `${(decimal * 100).toFixed(decimals)}%`;

@@ -11,16 +11,17 @@ export const StepProgressBar: React.FC<StepProgressBarProps> = ({
   onSelectStep,
 }) => {
   const steps = [
-    { number: 1, label: 'Your property', sub: 'Characteristics & comps' },
-    { number: 2, label: 'Your price', sub: 'Tiers & distribution' },
-    { number: 3, label: 'Your plan', sub: 'Revenue, outlook & brief' },
+    { number: 1, label: 'Property', fullLabel: 'Your property', sub: 'Characteristics & comps' },
+    { number: 2, label: 'Price', fullLabel: 'Your price', sub: 'Tiers & distribution' },
+    { number: 3, label: 'Plan', fullLabel: 'Your plan', sub: 'Revenue, outlook & brief' },
   ];
 
   return (
-    <div className="w-full bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-      <div className="grid grid-cols-3 gap-2 relative">
+    <nav aria-label="Advisory Workflow Steps" className="w-full bg-white border border-slate-200 rounded-2xl p-2 sm:p-4 shadow-xs">
+      <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
         {steps.map((step) => {
           const isActive = currentStep === step.number;
+          // Only show tick if step was directly completed before currentStep
           const isCompleted = currentStep > step.number;
 
           return (
@@ -28,7 +29,8 @@ export const StepProgressBar: React.FC<StepProgressBarProps> = ({
               key={step.number}
               type="button"
               onClick={() => onSelectStep(step.number)}
-              className={`text-left p-2.5 rounded-xl transition-all flex items-center gap-3 group ${
+              aria-current={isActive ? 'step' : undefined}
+              className={`text-left p-2 sm:p-2.5 rounded-xl transition-all flex items-center gap-2 sm:gap-3 min-h-[44px] group focus:outline-hidden focus:ring-2 focus:ring-teal-700 ${
                 isActive
                   ? 'bg-teal-50 border border-teal-200 ring-1 ring-teal-700'
                   : 'hover:bg-slate-50'
@@ -52,9 +54,10 @@ export const StepProgressBar: React.FC<StepProgressBarProps> = ({
                     isActive ? 'text-teal-950' : 'text-slate-800'
                   }`}
                 >
-                  Step {step.number}: {step.label}
+                  <span className="sm:hidden">{step.label}</span>
+                  <span className="hidden sm:inline">Step {step.number}: {step.fullLabel}</span>
                 </p>
-                <p className="text-[11px] text-slate-500 truncate hidden sm:block">
+                <p className="text-[11px] text-slate-500 truncate hidden md:block">
                   {step.sub}
                 </p>
               </div>
@@ -62,6 +65,6 @@ export const StepProgressBar: React.FC<StepProgressBarProps> = ({
           );
         })}
       </div>
-    </div>
+    </nav>
   );
 };

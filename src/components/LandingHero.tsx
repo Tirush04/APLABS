@@ -1,41 +1,43 @@
 import React from 'react';
-import { Sparkles, ArrowRight, Home, Building2, CheckCircle2 } from 'lucide-react';
+import { Sparkles, ArrowRight, Home, CheckCircle2 } from 'lucide-react';
 
 interface LandingHeroProps {
+  listingsCount: number;
   onTrySample: () => void;
   onStartCustom: () => void;
 }
 
 export const LandingHero: React.FC<LandingHeroProps> = ({
+  listingsCount,
   onTrySample,
   onStartCustom,
 }) => {
   return (
-    <div className="relative overflow-hidden bg-white border border-slate-200 rounded-3xl p-8 sm:p-12 shadow-sm text-center max-w-4xl mx-auto my-6">
+    <div className="relative overflow-hidden bg-white border border-slate-200 rounded-3xl p-6 sm:p-10 shadow-sm text-center max-w-4xl mx-auto my-4 sm:my-6">
       {/* Background soft ambient accents */}
       <div className="absolute -top-24 -left-24 w-72 h-72 bg-teal-50 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute -bottom-24 -right-24 w-72 h-72 bg-slate-100 rounded-full blur-3xl pointer-events-none" />
 
-      <div className="relative z-10 space-y-6">
+      <div className="relative z-10 space-y-5">
         <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-teal-50 text-teal-800 border border-teal-200 rounded-full text-xs font-bold tracking-wide">
           <Sparkles className="w-3.5 h-3.5 text-teal-700" />
           Inside Airbnb Washington, DC Scraped Market Intelligence
         </span>
 
-        <h1 className="text-3xl sm:text-5xl font-extrabold text-slate-900 tracking-tight leading-tight max-w-2xl mx-auto text-balance">
+        <h1 className="text-2xl sm:text-4xl lg:text-5xl font-extrabold text-slate-900 tracking-tight leading-tight max-w-2xl mx-auto text-balance">
           What should this DC home earn on Airbnb?
         </h1>
 
-        <p className="text-sm sm:text-base text-slate-600 max-w-xl mx-auto leading-relaxed">
-          Get a rigorous, data-grounded price recommendation in under 60 seconds. Every figure is computed in TypeScript code from 4,268 active DC listings—never hallucinated by AI.
+        <p className="text-xs sm:text-sm text-slate-600 max-w-xl mx-auto leading-relaxed">
+          Get a rigorous, data-grounded price recommendation. Every figure is computed in TypeScript code from {listingsCount.toLocaleString()} active DC listings—never hallucinated by AI.
         </p>
 
         {/* 2 Primary Buttons */}
-        <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3.5">
+        <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
           <button
             type="button"
             onClick={onTrySample}
-            className="w-full sm:w-auto px-6 py-3.5 bg-teal-800 hover:bg-teal-900 text-white font-semibold rounded-xl text-sm transition-all shadow-sm hover:shadow flex items-center justify-center gap-2"
+            className="w-full sm:w-auto px-5 py-3 bg-teal-800 hover:bg-teal-900 text-white font-semibold rounded-xl text-xs sm:text-sm transition-all shadow-sm hover:shadow flex items-center justify-center gap-2 min-h-[44px]"
           >
             <Sparkles className="w-4 h-4 text-teal-200" />
             <span>Try the sample 1-bed condo</span>
@@ -45,7 +47,7 @@ export const LandingHero: React.FC<LandingHeroProps> = ({
           <button
             type="button"
             onClick={onStartCustom}
-            className="w-full sm:w-auto px-6 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-900 font-semibold rounded-xl text-sm transition-all flex items-center justify-center gap-2"
+            className="w-full sm:w-auto px-5 py-3 bg-slate-100 hover:bg-slate-200 text-slate-900 font-semibold rounded-xl text-xs sm:text-sm transition-all flex items-center justify-center gap-2 min-h-[44px]"
           >
             <Home className="w-4 h-4 text-slate-600" />
             <span>Start with my property</span>
@@ -53,18 +55,18 @@ export const LandingHero: React.FC<LandingHeroProps> = ({
         </div>
 
         {/* Features Checklist */}
-        <div className="pt-6 border-t border-slate-100 flex flex-wrap items-center justify-center gap-6 text-xs text-slate-500 font-medium">
+        <div className="pt-4 border-t border-slate-100 flex flex-wrap items-center justify-center gap-4 sm:gap-6 text-xs text-slate-500 font-medium">
           <span className="flex items-center gap-1.5">
             <CheckCircle2 className="w-4 h-4 text-teal-700" />
-            4,268 DC Active Comps
+            {listingsCount.toLocaleString()} DC Active Comps
           </span>
           <span className="flex items-center gap-1.5">
             <CheckCircle2 className="w-4 h-4 text-teal-700" />
-            100% Code-Audited Numbers
+            Linear Interpolation Percentiles
           </span>
           <span className="flex items-center gap-1.5">
             <CheckCircle2 className="w-4 h-4 text-teal-700" />
-            1-Click Printable Client Brief
+            Printable Advisory Brief
           </span>
         </div>
       </div>

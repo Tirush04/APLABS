@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { INSIDE_AIRBNB_DATA_URL, EXPECTED_LISTING_COLUMNS } from '../config/data';
+import { Listing } from '../types';
 import {
   Download,
   Upload,
@@ -9,17 +10,59 @@ import {
   FileText,
   ShieldCheck,
   Calculator,
-  Database,
-  ExternalLink,
+  Table,
 } from 'lucide-react';
 
-export const DataMethodTab: React.FC = () => {
+interface DataMethodTabProps {
+  comps?: Listing[];
+}
+
+const COLUMN_DESCRIPTIONS: { name: string; type: string; description: string }[] = [
+  { name: 'id', type: 'string', description: 'Unique Airbnb listing identifier' },
+  { name: 'listing_url', type: 'string', description: 'Canonical URL to the public Airbnb listing' },
+  { name: 'scrape_id', type: 'string', description: 'Inside Airbnb scrape job run identifier' },
+  { name: 'last_scraped', type: 'date', description: 'Date listing was scraped from Airbnb' },
+  { name: 'source', type: 'string', description: 'Data pipeline source tag' },
+  { name: 'name', type: 'string', description: 'Public listing title and headline' },
+  { name: 'description', type: 'string', description: 'Listing narrative description text' },
+  { name: 'neighbourhood_cleansed', type: 'string', description: 'Official DC neighbourhood designation' },
+  { name: 'property_type', type: 'string', description: 'Detailed property architectural category' },
+  { name: 'room_type', type: 'string', description: 'Entire home/apt, Private room, or Shared room' },
+  { name: 'accommodates', type: 'integer', description: 'Maximum guest capacity' },
+  { name: 'bathrooms', type: 'float', description: 'Number of full and half bathrooms' },
+  { name: 'bathrooms_text', type: 'string', description: 'Raw textual bathroom specification' },
+  { name: 'bedrooms', type: 'integer', description: 'Bedroom count (0 designates Studio)' },
+  { name: 'beds', type: 'integer', description: 'Count of physical beds' },
+  { name: 'amenities', type: 'json array', description: 'List of features and amenities provided' },
+  { name: 'price', type: 'float', description: 'Current published nightly rate in USD' },
+  { name: 'minimum_nights', type: 'integer', description: 'Minimum booking duration requirement' },
+  { name: 'maximum_nights', type: 'integer', description: 'Maximum allowed booking duration' },
+  { name: 'availability_365', type: 'integer', description: 'Nights available over the next 365 days' },
+  { name: 'number_of_reviews', type: 'integer', description: 'Total lifetime guest reviews' },
+  { name: 'number_of_reviews_ltm', type: 'integer', description: 'Reviews received in last 12 months' },
+  { name: 'review_scores_rating', type: 'float', description: 'Overall guest rating (0.00–5.00)' },
+  { name: 'review_scores_accuracy', type: 'float', description: 'Accuracy sub-score rating (0.00–5.00)' },
+  { name: 'review_scores_cleanliness', type: 'float', description: 'Cleanliness sub-score rating (0.00–5.00)' },
+  { name: 'review_scores_checkin', type: 'float', description: 'Check-in sub-score rating (0.00–5.00)' },
+  { name: 'review_scores_communication', type: 'float', description: 'Host communication rating (0.00–5.00)' },
+  { name: 'review_scores_location', type: 'float', description: 'Location rating (0.00–5.00)' },
+  { name: 'review_scores_value', type: 'float', description: 'Value for money rating (0.00–5.00)' },
+  { name: 'license', type: 'string', description: 'DC DLCP short-term rental license number' },
+  { name: 'host_is_superhost', type: 'string (t/f)', description: 'Whether the host holds Airbnb Superhost badge' },
+  { name: 'estimated_revenue_l365d', type: 'float', description: 'Inside Airbnb model estimated revenue (USD/year)' },
+  { name: 'estimated_booked_nights_l365d', type: 'integer', description: 'Inside Airbnb model estimated booked nights' },
+];
+
+export const DataMethodTab: React.FC<DataMethodTabProps> = ({ comps = [] }) => {
   const {
     cleaningLog,
     aiGuardLogs,
     downloadCleanedCsv,
+    downloadCompsCsv,
     uploadCustomListings,
     loadSource,
+    detectedSource,
+    scrapeDate,
     listings,
   } = useData();
 
@@ -52,24 +95,41 @@ export const DataMethodTab: React.FC = () => {
           <h2 className="text-xl font-bold text-slate-900 mt-1">
             Data Source, Methodology & Mathematical Formulas
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Active Dataset: {loadSource} · Total active listings: {listings.length.toLocaleString()}
-          </p>
+          <div className="flex items-center gap-2 mt-1">
+            <span className="text-xs text-slate-600">
+              Active Source: <strong className="text-teal-900">{detectedSource}</strong> ({loadSource})
+            </span>
+            <span className="text-xs text-slate-400">·</span>
+            <span className="text-xs text-slate-600 font-mono">
+              Scrape: {scrapeDate} · {listings.length.toLocaleString()} active listings
+            </span>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {comps.length > 0 && (
+            <button
+              type="button"
+              onClick={() => downloadCompsCsv(comps)}
+              className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-teal-900 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-xl transition-colors shrink-0 min-h-[44px]"
+            >
+              <Download className="w-3.5 h-3.5 text-teal-700" />
+              <span>Download Similar Comps ({comps.length} rows)</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={downloadCleanedCsv}
-            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors shrink-0"
+            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors shrink-0 min-h-[44px]"
           >
             <Download className="w-3.5 h-3.5 text-slate-600" />
-            <span>Download Cleaned Comps CSV</span>
+            <span>Download Full Cleaned CSV ({listings.length} rows)</span>
           </button>
         </div>
       </div>
 
-      {/* 2. Upload Newer Cleaned File */}
+      {/* 2. Upload Newer Cleaned File (Keyboard Accessible) */}
       <div className="p-6 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -84,11 +144,11 @@ export const DataMethodTab: React.FC = () => {
         </div>
 
         <p className="text-xs text-slate-600">
-          Upload an updated scrape file. The system will automatically validate the schema and all required fields. If validation fails, existing data is safely retained.
+          Upload an updated scrape file. The system validates all 33 required columns and ensures non-empty listings. If validation fails, existing data is safely preserved.
         </p>
 
         <div className="flex items-center gap-3 pt-2">
-          <label className="inline-flex items-center gap-2 px-4 py-2 bg-teal-800 hover:bg-teal-900 text-white rounded-xl text-xs font-semibold cursor-pointer transition-colors shadow-xs">
+          <label className="relative inline-flex items-center gap-2 px-4 py-2.5 bg-teal-800 hover:bg-teal-900 focus-within:ring-2 focus-within:ring-teal-700 focus-within:ring-offset-2 text-white rounded-xl text-xs font-semibold cursor-pointer transition-colors shadow-xs min-h-[44px]">
             <Upload className="w-3.5 h-3.5" />
             <span>{isUploading ? 'Validating CSV...' : 'Select CSV File'}</span>
             <input
@@ -96,7 +156,8 @@ export const DataMethodTab: React.FC = () => {
               accept=".csv"
               onChange={handleFileUpload}
               disabled={isUploading}
-              className="hidden"
+              className="sr-only"
+              aria-label="Upload cleaned listings CSV file"
             />
           </label>
 
@@ -179,7 +240,45 @@ export const DataMethodTab: React.FC = () => {
         </div>
       </div>
 
-      {/* 4. Cleaning Log Rendered As-Is */}
+      {/* 4. Complete 33-Column Schema Descriptions */}
+      <div className="p-6 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Table className="w-4 h-4 text-teal-700" />
+            <h3 className="text-sm font-bold text-slate-900">
+              Cleaned Dataset Schema (All 33 Columns)
+            </h3>
+          </div>
+          <span className="text-xs text-slate-500 font-mono">
+            {COLUMN_DESCRIPTIONS.length} documented columns
+          </span>
+        </div>
+
+        <div className="max-h-96 overflow-y-auto border border-slate-200 rounded-xl">
+          <table className="w-full text-left text-xs divide-y divide-slate-200">
+            <thead className="bg-slate-50 text-slate-700 sticky top-0 z-10 font-semibold">
+              <tr>
+                <th className="p-3 w-8">#</th>
+                <th className="p-3">Column Name</th>
+                <th className="p-3">Type</th>
+                <th className="p-3">Description & Usage</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
+              {COLUMN_DESCRIPTIONS.map((col, idx) => (
+                <tr key={col.name} className="hover:bg-slate-50">
+                  <td className="p-3 text-slate-400">{idx + 1}</td>
+                  <td className="p-3 font-semibold text-slate-900">{col.name}</td>
+                  <td className="p-3 text-teal-800">{col.type}</td>
+                  <td className="p-3 font-sans text-slate-600">{col.description}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* 5. Cleaning Log */}
       <div className="p-6 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-3">
         <div className="flex items-center gap-2">
           <FileText className="w-4 h-4 text-teal-700" />
@@ -196,7 +295,7 @@ export const DataMethodTab: React.FC = () => {
         </div>
       </div>
 
-      {/* 5. AI Guard Log */}
+      {/* 6. AI Guard Log */}
       <div className="p-6 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -211,7 +310,7 @@ export const DataMethodTab: React.FC = () => {
         </div>
 
         <p className="text-xs text-slate-500">
-          Every response generated by Gemini is inspected by the Number Guard regex engine. Any numeric token not matching the computed JSON context (±0.5 or ±1%) is redacted with [not in data] and recorded here.
+          Every response generated by Gemini is inspected by the Number Guard regex engine. Any numeric token not matching the computed JSON context (exact match, ±0.5, or ±1% tolerance), including written number words, is redacted with [not in data] and recorded here.
         </p>
 
         {aiGuardLogs.length === 0 ? (
@@ -266,7 +365,7 @@ export const DataMethodTab: React.FC = () => {
       {/* Footer Attribution Link */}
       <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-600 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
         <p>
-          Data: Inside Airbnb, Washington DC, scraped 2026-09-20,{' '}
+          Data: Inside Airbnb, Washington DC, scraped {scrapeDate},{' '}
           <a
             href={INSIDE_AIRBNB_DATA_URL}
             target="_blank"

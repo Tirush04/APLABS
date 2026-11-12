@@ -1,5 +1,5 @@
 export interface Listing {
-  id: string | number;
+  id: string;
   neighbourhood_cleansed: string;
   latitude: number;
   longitude: number;
@@ -34,7 +34,7 @@ export interface Listing {
 }
 
 export interface CalendarEntry {
-  listing_id: string | number;
+  listing_id: string;
   month: string;
   nights: number;
   unavailable_nights: number;
@@ -65,7 +65,8 @@ export interface Provenance {
   filterApplied: string;
   rowCount: number;
   formula: string;
-  listingIds: (string | number)[];
+  listingIds: string[];
+  method?: string; // Percentile PERCENTILE.INC / Share = count ÷ total / Median of field / Formula
   widenedSteps?: string[];
   isLowSample?: boolean;
 }
@@ -81,17 +82,29 @@ export interface PricingTiers {
   recommendedPrice: number;
   iqrBand: [number, number];
   prices: number[];
+  launchProvenance: Provenance;
+  marketProvenance: Provenance;
+  premiumProvenance: Provenance;
+  p25Provenance: Provenance;
+  p75Provenance: Provenance;
   provenance: Provenance;
 }
 
 export interface RevenueMetrics {
   bookedNightsMedian: number;
+  occupancyPct: number;
   annualRevenueMedian: number;
   annualRevenueP25: number;
   annualRevenueP75: number;
   simpleCheckProduct: number;
   breakEvenNightlyPrice?: number;
   monthsToCover?: { month: number; cumulativeRev: number; cumulativeCost: number }[];
+  occupancyProvenance: Provenance;
+  revenueProvenance: Provenance;
+  bookedNightsProvenance: Provenance;
+  breakEvenProvenance?: Provenance;
+  scenarioProvenance?: Provenance;
+  simpleCheckProvenance?: Provenance;
   provenance: Provenance;
 }
 
@@ -101,6 +114,8 @@ export interface BookingOutlookMonth {
   unavailableNights: number;
   unavailablePercent: number;
   listingCount: number;
+  isPast?: boolean;
+  isPartial?: boolean;
 }
 
 export interface AmenityComparison {
@@ -112,6 +127,10 @@ export interface AmenityComparison {
   medWithout: number;
   diff: number;
   isLowSample: boolean;
+  withListingIds: string[];
+  withoutListingIds: string[];
+  withProvenance: Provenance;
+  withoutProvenance: Provenance;
   provenance: Provenance;
 }
 
@@ -123,6 +142,7 @@ export interface NeighbourhoodStats {
   superhostShare: number;
   medianPrice1BedEntire: number;
   listingCount1BedEntire: number;
+  provenance?: Provenance;
 }
 
 export interface AIGuardLogEntry {
@@ -132,4 +152,13 @@ export interface AIGuardLogEntry {
   originalResponse: string;
   flaggedTokens: string[];
   verified: boolean;
+}
+
+export interface SeasonalPriceTrendPoint {
+  month: string;
+  displayMonth: string;
+  medianBookedPrice: number;
+  weightedAvgPrice: number;
+  demandRate: number; // unavailable %
+  bookedListingsCount: number;
 }

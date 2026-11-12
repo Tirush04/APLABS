@@ -7,7 +7,6 @@ import {
   ShieldAlert,
   Award,
   Home,
-  CheckCircle2,
   ExternalLink,
   Building,
   FileCheck,
@@ -91,7 +90,7 @@ export const CompetitionCard: React.FC<CompetitionCardProps> = ({
           <p className="text-2xl font-bold font-mono text-teal-800 mt-2">
             {formatPercent(licenseShare)}
           </p>
-          <p className="text-[11px] text-slate-500 mt-1">listings with registered DLCP licence</p>
+          <p className="text-[11px] text-slate-500 mt-1">listings showing a licence number</p>
         </div>
 
         {/* Superhost Share */}
@@ -103,7 +102,7 @@ export const CompetitionCard: React.FC<CompetitionCardProps> = ({
           <p className="text-2xl font-bold font-mono text-slate-900 mt-2">
             {formatPercent(superhostShare)}
           </p>
-          <p className="text-[11px] text-slate-500 mt-1">hosts with Airbnb Superhost status</p>
+          <p className="text-[11px] text-slate-500 mt-1">listings whose host is a Superhost</p>
         </div>
       </div>
 
@@ -114,7 +113,7 @@ export const CompetitionCard: React.FC<CompetitionCardProps> = ({
             District of Columbia Short-Term Rental Regulations (DC DLCP)
           </p>
           <p className="text-teal-900 mt-0.5">
-            Advisors must verify current zoning, 90-night unhosted cap exceptions, and registration requirements through official DC Department of Licensing and Consumer Protection portals.
+            Advisors must verify current zoning, registration, and inspection requirements through official DC Department of Licensing and Consumer Protection portals.
           </p>
         </div>
 
@@ -122,7 +121,7 @@ export const CompetitionCard: React.FC<CompetitionCardProps> = ({
           href={OFFICIAL_DLCP_URL}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-teal-800 text-white font-semibold rounded-lg hover:bg-teal-900 transition-colors shrink-0"
+          className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-teal-800 text-white font-semibold rounded-lg hover:bg-teal-900 transition-colors shrink-0 min-h-[44px]"
         >
           <span>Official DC DLCP Guidelines</span>
           <ExternalLink className="w-3.5 h-3.5" />

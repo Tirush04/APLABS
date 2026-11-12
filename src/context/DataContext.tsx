@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import Papa from 'papaparse';
 import {
   LISTINGS,
@@ -20,12 +20,15 @@ interface DataContextType {
   isLoading: boolean;
   error: string | null;
   loadSource: string;
+  detectedSource: 'GitHub' | 'jsDelivr' | 'Local' | 'User Upload';
+  scrapeDate: string;
   isMapAvailable: boolean;
   aiGuardLogs: AIGuardLogEntry[];
   addAIGuardLog: (entry: Omit<AIGuardLogEntry, 'id' | 'timestamp'>) => void;
   retryLoad: () => void;
   uploadCustomListings: (file: File) => Promise<{ success: boolean; message: string }>;
   downloadCleanedCsv: () => void;
+  downloadCompsCsv: (comps: Listing[]) => void;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -38,6 +41,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [loadSource, setLoadSource] = useState<string>('primary');
+  const [detectedSource, setDetectedSource] = useState<'GitHub' | 'jsDelivr' | 'Local' | 'User Upload'>('Local');
   const [isMapAvailable, setIsMapAvailable] = useState<boolean>(true);
   const [aiGuardLogs, setAiGuardLogs] = useState<AIGuardLogEntry[]>([]);
 
@@ -50,24 +54,31 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAiGuardLogs((prev) => [newEntry, ...prev]);
   }, []);
 
-  const fetchWithFallback = async (primaryUrl: string, mirrorUrl: string, localUrl: string) => {
+  const fetchWithFallback = async (
+    primaryUrl: string,
+    mirrorUrl: string,
+    localUrl: string
+  ): Promise<{ text: string; source: 'GitHub' | 'jsDelivr' | 'Local' }> => {
     try {
       const res = await fetch(primaryUrl);
-      if (res.ok) return await res.text();
-    } catch {
-      // primary failed, try mirror
-    }
+      if (res.ok) {
+        const text = await res.text();
+        return { text, source: 'GitHub' };
+      }
+    } catch {}
 
     try {
       const res = await fetch(mirrorUrl);
-      if (res.ok) return await res.text();
-    } catch {
-      // mirror failed, try local
-    }
+      if (res.ok) {
+        const text = await res.text();
+        return { text, source: 'jsDelivr' };
+      }
+    } catch {}
 
     const res = await fetch(localUrl);
-    if (!res.ok) throw new Error(`Could not load file from any source: ${primaryUrl}`);
-    return await res.text();
+    if (!res.ok) throw new Error(`Could not load data file from any source: ${primaryUrl}`);
+    const text = await res.text();
+    return { text, source: 'Local' };
   };
 
   const loadAllData = useCallback(async () => {
@@ -75,67 +86,62 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setError(null);
 
     try {
-      // 1. Fetch Listings CSV
-      const listingsText = await fetchWithFallback(
-        LISTINGS,
-        `${MIRROR}dc_listings_clean.csv`,
-        LOCAL_DATA.LISTINGS
-      );
+      // Load all four data files concurrently with Promise.all
+      const [listingsRes, calendarRes, logRes, mapRes] = await Promise.all([
+        fetchWithFallback(LISTINGS, `${MIRROR}dc_listings_clean.csv`, LOCAL_DATA.LISTINGS),
+        fetchWithFallback(CALENDAR, `${MIRROR}dc_calendar_monthly.csv`, LOCAL_DATA.CALENDAR),
+        fetchWithFallback(LOG, `${MIRROR}cleaning_log.md`, LOCAL_DATA.LOG).catch(() => ({
+          text: '# Data Cleaning Log\n\nCleaned dataset from Inside Airbnb, Washington DC, scraped 2026-09-20.',
+          source: 'Local' as const,
+        })),
+        fetchWithFallback(MAP, `${MIRROR}dc_neighbourhoods.json`, LOCAL_DATA.MAP).catch(() => null),
+      ]);
 
+      setDetectedSource(listingsRes.source);
+      setLoadSource(`${listingsRes.source} Source (scraped 2026-09-20)`);
+
+      // Parse Listings CSV
       const parsedListings = await new Promise<Listing[]>((resolve, reject) => {
-        Papa.parse(listingsText, {
+        Papa.parse(listingsRes.text, {
           header: true,
-          dynamicTyping: true,
+          dynamicTyping: (field) => field !== 'id' && field !== 'listing_id',
           skipEmptyLines: true,
           complete: (results) => {
-            const cleanData = (results.data as any[]).filter((r) => r.id && r.neighbourhood_cleansed);
+            const cleanData = (results.data as any[])
+              .filter((r) => r.id && r.neighbourhood_cleansed)
+              .map((r) => ({ ...r, id: String(r.id) }));
             resolve(cleanData as Listing[]);
           },
           error: (err: any) => reject(err),
         });
       });
 
-      // 2. Fetch Calendar CSV
-      const calendarText = await fetchWithFallback(
-        CALENDAR,
-        `${MIRROR}dc_calendar_monthly.csv`,
-        LOCAL_DATA.CALENDAR
-      );
-
+      // Parse Calendar CSV
       const parsedCalendar = await new Promise<CalendarEntry[]>((resolve, reject) => {
-        Papa.parse(calendarText, {
+        Papa.parse(calendarRes.text, {
           header: true,
-          dynamicTyping: true,
+          dynamicTyping: (field) => field !== 'id' && field !== 'listing_id',
           skipEmptyLines: true,
           complete: (results) => {
-            resolve(results.data as CalendarEntry[]);
+            const cleanCal = (results.data as any[]).map((r) => ({
+              ...r,
+              listing_id: String(r.listing_id),
+            }));
+            resolve(cleanCal as CalendarEntry[]);
           },
           error: (err: any) => reject(err),
         });
       });
 
-      // 3. Fetch Cleaning Log
-      let logText = '';
-      try {
-        logText = await fetchWithFallback(
-          LOG,
-          `${MIRROR}cleaning_log.md`,
-          LOCAL_DATA.LOG
-        );
-      } catch {
-        logText = '# Data Cleaning Log\n\nCleaned dataset from Inside Airbnb, Washington DC, scraped 2026-09-20.';
+      // GeoJSON Map
+      let geoData: any = null;
+      if (mapRes && mapRes.text) {
+        try {
+          geoData = JSON.parse(mapRes.text);
+        } catch {}
       }
 
-      // 4. Fetch GeoJSON Map
-      let geoData: any = null;
-      try {
-        const geoText = await fetchWithFallback(
-          MAP,
-          `${MIRROR}dc_neighbourhoods.json`,
-          LOCAL_DATA.MAP
-        );
-        geoData = JSON.parse(geoText);
-      } catch {
+      if (!geoData) {
         try {
           const res = await fetch(ORIGINAL_MAP);
           if (res.ok) geoData = await res.json();
@@ -147,9 +153,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       setListings(parsedListings);
       setCalendar(parsedCalendar);
-      setCleaningLog(logText);
+      setCleaningLog(logRes.text);
       setGeoJson(geoData);
-      setLoadSource('bundled');
       setIsLoading(false);
     } catch (err: any) {
       console.error('Error loading dataset:', err);
@@ -162,12 +167,24 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     loadAllData();
   }, [loadAllData]);
 
+  // Derived scrape date constant from max(last_scraped) in loaded data
+  const scrapeDate = useMemo(() => {
+    let maxDate = '2026-09-20';
+    for (let i = 0; i < listings.length; i++) {
+      const d = listings[i].last_scraped;
+      if (d && d > maxDate) {
+        maxDate = d;
+      }
+    }
+    return maxDate;
+  }, [listings]);
+
   // Upload custom cleaned file
   const uploadCustomListings = async (file: File): Promise<{ success: boolean; message: string }> => {
     return new Promise((resolve) => {
       Papa.parse(file, {
         header: true,
-        dynamicTyping: true,
+        dynamicTyping: (field) => field !== 'id' && field !== 'listing_id',
         skipEmptyLines: true,
         complete: (results) => {
           const fields = results.meta.fields || [];
@@ -183,7 +200,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             return;
           }
 
-          const cleanData = (results.data as any[]).filter((r) => r.id && r.neighbourhood_cleansed);
+          const cleanData = (results.data as any[])
+            .filter((r) => r.id && r.neighbourhood_cleansed)
+            .map((r) => ({ ...r, id: String(r.id) }));
           if (cleanData.length === 0) {
             resolve({
               success: false,
@@ -193,6 +212,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
 
           setListings(cleanData as Listing[]);
+          setDetectedSource('User Upload');
           setLoadSource(`User uploaded: ${file.name} (${cleanData.length.toLocaleString()} rows)`);
           resolve({
             success: true,
@@ -216,11 +236,27 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', 'dc_listings_clean.csv');
+    link.setAttribute('download', `dc_listings_clean_${scrapeDate}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-  }, [listings]);
+  }, [listings, scrapeDate]);
+
+  const downloadCompsCsv = useCallback(
+    (comps: Listing[]) => {
+      if (!comps || comps.length === 0) return;
+      const csv = Papa.unparse(comps);
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `dc_similar_listings_${scrapeDate}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    },
+    [scrapeDate]
+  );
 
   return (
     <DataContext.Provider
@@ -232,12 +268,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isLoading,
         error,
         loadSource,
+        detectedSource,
+        scrapeDate,
         isMapAvailable: isMapAvailable && geoJson !== null,
         aiGuardLogs,
         addAIGuardLog,
         retryLoad: loadAllData,
         uploadCustomListings,
         downloadCleanedCsv,
+        downloadCompsCsv,
       }}
     >
       {children}

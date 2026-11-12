@@ -1,4 +1,5 @@
 import express from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
@@ -10,9 +11,42 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '50kb' }));
 
 const PORT = process.env.PORT || 3000;
+const GEMINI_MODEL = 'gemini-3.8-flash';
+
+// In-memory rate limiter: 20 requests per 5 minutes per IP on /api/gemini/*
+interface RateLimitRecord {
+  count: number;
+  resetTime: number;
+}
+const rateLimitMap = new Map<string, RateLimitRecord>();
+const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_REQUESTS_PER_WINDOW = 20;
+
+function rateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown-ip';
+  const now = Date.now();
+  const record = rateLimitMap.get(ip);
+
+  if (!record || now > record.resetTime) {
+    rateLimitMap.set(ip, { count: 1, resetTime: now + RATE_LIMIT_WINDOW_MS });
+    return next();
+  }
+
+  if (record.count >= MAX_REQUESTS_PER_WINDOW) {
+    const waitMins = Math.ceil((record.resetTime - now) / 60000);
+    return res.status(429).json({
+      error: `Rate limit reached (maximum 20 requests per 5 minutes). Please try again in about ${waitMins} minute(s). All underlying market calculations continue to work normally.`,
+    });
+  }
+
+  record.count += 1;
+  return next();
+}
+
+app.use('/api/gemini/*', rateLimitMiddleware);
 
 function getGeminiClient(): GoogleGenAI | null {
   const key = process.env.GEMINI_API_KEY;
@@ -37,10 +71,40 @@ CRITICAL MANDATORY RULES:
 5. Keep answers concise, direct, and under 80 words.
 6. Format key numbers in bold.`;
 
-// Endpoint: Chat with streaming SSE
-app.post('/api/gemini/chat', async (req, res) => {
+// Health check endpoint
+app.get('/api/health', (_req, res) => {
+  const ai = getGeminiClient();
+  res.json({
+    ai: ai !== null,
+    model: GEMINI_MODEL,
+  });
+});
+
+// Middleware for payload size enforcement (message > 500 chars, contextJson > 20 KB)
+function validatePayload(req: Request, res: Response, next: NextFunction) {
+  const { message, contextJson } = req.body;
+  if (message && typeof message === 'string' && message.length > 500) {
+    return res.status(413).json({
+      error: 'Message exceeds maximum allowed length of 500 characters.',
+    });
+  }
+
+  if (contextJson) {
+    const bytes = Buffer.byteLength(JSON.stringify(contextJson), 'utf8');
+    if (bytes > 20 * 1024) {
+      return res.status(413).json({
+        error: 'Context payload exceeds maximum size of 20 KB.',
+      });
+    }
+  }
+
+  return next();
+}
+
+// Endpoint: Chat with streaming SSE and last 4 turns history
+app.post('/api/gemini/chat', validatePayload, async (req, res) => {
   try {
-    const { message, contextJson } = req.body;
+    const { message, contextJson, history = [] } = req.body;
     if (!message) {
       return res.status(400).json({ error: 'Message is required.' });
     }
@@ -56,15 +120,25 @@ app.post('/api/gemini/chat', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    const prompt = `CONTEXT JSON (Calculated from DC listings dataset):
+    // Build chat contents taking last 4 turns if provided
+    const recentHistory = Array.isArray(history) ? history.slice(-4) : [];
+    const formattedHistory = recentHistory.map((item: any) => ({
+      role: item.role === 'user' ? 'user' : 'model',
+      parts: [{ text: item.text || '' }],
+    }));
+
+    const currentPrompt = `CONTEXT JSON (Calculated from DC listings dataset):
 ${JSON.stringify(contextJson, null, 2)}
 
 USER QUESTION:
 ${message}`;
 
     const stream = await ai.models.generateContentStream({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
+      model: GEMINI_MODEL,
+      contents: [
+        ...formattedHistory,
+        { role: 'user', parts: [{ text: currentPrompt }] },
+      ],
       config: {
         systemInstruction: BASE_SYSTEM_INSTRUCTION,
       },
@@ -91,7 +165,7 @@ ${message}`;
 });
 
 // Endpoint: Explain this to my client (2 sentences)
-app.post('/api/gemini/explain', async (req, res) => {
+app.post('/api/gemini/explain', validatePayload, async (req, res) => {
   try {
     const { screenName, contextJson } = req.body;
     const ai = getGeminiClient();
@@ -110,7 +184,7 @@ Write exactly 2 warm, confident, owner-friendly sentences explaining these speci
 Do not introduce any numbers not present in the JSON above. Keep it strictly grounded in the computed data.`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: GEMINI_MODEL,
       contents: prompt,
       config: {
         systemInstruction: BASE_SYSTEM_INSTRUCTION,
@@ -125,7 +199,7 @@ Do not introduce any numbers not present in the JSON above. Keep it strictly gro
 });
 
 // Endpoint: Client Brief 3-sentence narrative
-app.post('/api/gemini/brief-narrative', async (req, res) => {
+app.post('/api/gemini/brief-narrative', validatePayload, async (req, res) => {
   try {
     const { contextJson } = req.body;
     const ai = getGeminiClient();
@@ -141,11 +215,11 @@ ${JSON.stringify(contextJson, null, 2)}
 
 Sentence 1: State the recommended nightly pricing and typical market range for their neighbourhood and property type.
 Sentence 2: State the expected annual booked nights and estimated median annual revenue.
-Sentence 3: Provide a strategic recommendation on launching (e.g. launch tier vs market tier) or key amenities based only on the numbers above.
+Sentence 3: Provide a strategic recommendation on launching or key amenities based only on the numbers above.
 Quote only numbers from the JSON above. Never invent numbers.`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: GEMINI_MODEL,
       contents: prompt,
       config: {
         systemInstruction: BASE_SYSTEM_INSTRUCTION,

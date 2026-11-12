@@ -1,7 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
-  BarChart,
-  Bar,
   XAxis,
   YAxis,
   Tooltip,
@@ -11,23 +9,22 @@ import {
   Line,
   Legend,
 } from 'recharts';
-import { RevenueMetrics, PricingTiers, PropertyProfile, Provenance } from '../types';
+import { RevenueMetrics, PricingTiers, PropertyProfile, Provenance, Listing } from '../types';
 import { formatCurrency, formatNumber } from '../utils/math';
 import { ProvenanceButton } from './ProvenanceModal';
 import {
-  DollarSign,
-  Calendar,
   Sparkles,
   Info,
   Sliders,
   ShieldCheck,
-  TrendingUp,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface RevenueCardProps {
   revenue: RevenueMetrics;
   pricing: PricingTiers;
   profile: PropertyProfile;
+  comps?: Listing[];
   onOpenProvenance: (p: Provenance) => void;
   onOpenExplain: () => void;
 }
@@ -36,30 +33,99 @@ export const RevenueCard: React.FC<RevenueCardProps> = ({
   revenue,
   pricing,
   profile,
+  comps = [],
   onOpenProvenance,
   onOpenExplain,
 }) => {
-  // Scenario "What if" nightly price slider
-  const [scenarioPrice, setScenarioPrice] = useState<number>(
-    Math.round(pricing.recommendedPrice)
-  );
+  // Slider bounds from min/max comp price (guard max > min)
+  const { minSliderPrice, maxSliderPrice } = useMemo(() => {
+    if (comps && comps.length > 0) {
+      const prices = comps.map((c) => Number(c.price)).filter((p) => !isNaN(p) && p > 0);
+      if (prices.length > 0) {
+        const minP = Math.floor(Math.min(...prices));
+        const maxP = Math.ceil(Math.max(...prices));
+        if (maxP > minP) {
+          return { minSliderPrice: minP, maxSliderPrice: maxP };
+        }
+      }
+    }
+    const fallbackMin = Math.max(30, Math.floor(pricing.p25 * 0.7));
+    const fallbackMax = Math.max(fallbackMin + 50, Math.ceil(pricing.topRatedP75 * 1.5));
+    return { minSliderPrice: fallbackMin, maxSliderPrice: fallbackMax };
+  }, [comps, pricing.p25, pricing.topRatedP75]);
 
-  // Sync scenario price when recommended price changes if untouched
+  // Scenario "What if" nightly price slider
+  const [scenarioPrice, setScenarioPrice] = useState<number>(() => {
+    const raw = Math.round(pricing.recommendedPrice);
+    const stepped = Math.round(raw / 5) * 5;
+    return Math.max(minSliderPrice, Math.min(maxSliderPrice, stepped));
+  });
+
+  // Sync scenario price when recommended price changes
   React.useEffect(() => {
-    setScenarioPrice(Math.round(pricing.recommendedPrice));
-  }, [pricing.recommendedPrice]);
+    const raw = Math.round(pricing.recommendedPrice);
+    const stepped = Math.round(raw / 5) * 5;
+    setScenarioPrice(Math.max(minSliderPrice, Math.min(maxSliderPrice, stepped)));
+  }, [pricing.recommendedPrice, minSliderPrice, maxSliderPrice]);
 
   const scenarioAnnualRevenue = Math.round(
     scenarioPrice * revenue.bookedNightsMedian
   );
 
+  const scenarioProvenance: Provenance = revenue.scenarioProvenance || {
+    metricName: 'What-If Scenario Projected Revenue',
+    datasetFile: 'dc_listings_clean.csv',
+    filterApplied: `Scenario price ($${scenarioPrice}) × median booked nights (${revenue.bookedNightsMedian})`,
+    rowCount: pricing.n,
+    formula: 'scenario_price × median(estimated_booked_nights_l365d)',
+    listingIds: pricing.provenance.listingIds,
+    method: 'Parametric scenario extrapolation using actual comp sample median booked nights',
+  };
+
+  const monthlyRevProvenance: Provenance = {
+    metricName: 'Estimated Monthly Revenue (P50)',
+    datasetFile: 'dc_listings_clean.csv',
+    filterApplied: pricing.provenance.filterApplied,
+    rowCount: revenue.revenueProvenance?.rowCount || pricing.n,
+    formula: 'annual_revenue_median ÷ 12',
+    listingIds: pricing.provenance.listingIds,
+    method: 'Even 12-month division of median estimated annual revenue',
+  };
+
+  if (pricing.n === 0) {
+    return (
+      <div className="p-6 bg-amber-50 border border-amber-200 rounded-2xl text-amber-900 flex items-start gap-3">
+        <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+        <div>
+          <h4 className="font-bold text-sm">Not enough similar listings: try a nearby neighbourhood</h4>
+          <p className="text-xs text-amber-800 mt-0.5">
+            Zero active comparable listings found to project revenue. Adjust your criteria or neighbourhood.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const occupancyPct = revenue.occupancyPct || Math.round((revenue.bookedNightsMedian / 365) * 100);
+
   const oneSentenceHeadline = `Expect approximately ${formatCurrency(
     revenue.annualRevenueMedian
   )} in annual revenue across ${formatNumber(
     revenue.bookedNightsMedian
-  )} booked nights (~${Math.round(
-    (revenue.bookedNightsMedian / 365) * 100
-  )}% occupancy).`;
+  )} booked nights (~${occupancyPct}% occupancy).`;
+
+  // Computed relation for simple check product
+  const diffFromSimple = Math.round(revenue.simpleCheckProduct - revenue.annualRevenueMedian);
+  const diffAbs = Math.abs(diffFromSimple);
+  const simpleRelationText = diffFromSimple >= 0
+    ? `The simple product ($${Math.round(revenue.simpleCheckProduct).toLocaleString()}) is higher than the actual median estimate ($${revenue.annualRevenueMedian.toLocaleString()}) by $${diffAbs.toLocaleString()}/yr.`
+    : `The simple product ($${Math.round(revenue.simpleCheckProduct).toLocaleString()}) is lower than the actual median estimate ($${revenue.annualRevenueMedian.toLocaleString()}) by $${diffAbs.toLocaleString()}/yr.`;
+
+  // First month where cumulative revenue covers cumulative costs
+  const coveredMonthEntry = revenue.monthsToCover?.find(
+    (m) => m.cumulativeRev >= m.cumulativeCost
+  );
+  const coveredMonth = coveredMonthEntry ? coveredMonthEntry.month : null;
 
   return (
     <div className="space-y-6">
@@ -73,14 +139,14 @@ export const RevenueCard: React.FC<RevenueCardProps> = ({
             {oneSentenceHeadline}
           </p>
           <p className="text-xs text-slate-400 mt-1">
-            Based on historical 365-day review and availability performance from active comps.
+            Based on historical 365-day review and availability performance from {pricing.n} active comps.
           </p>
         </div>
 
         <button
           type="button"
           onClick={onOpenExplain}
-          className="inline-flex items-center gap-2 px-4 py-2.5 bg-white text-slate-900 text-xs font-semibold rounded-xl hover:bg-slate-100 transition-colors shrink-0 shadow-xs"
+          className="inline-flex items-center gap-2 px-4 py-2.5 bg-white text-slate-900 text-xs font-semibold rounded-xl hover:bg-slate-100 transition-colors shrink-0 shadow-xs min-h-[44px]"
         >
           <Sparkles className="w-3.5 h-3.5 text-teal-700" />
           <span>Explain this to my client</span>
@@ -94,7 +160,7 @@ export const RevenueCard: React.FC<RevenueCardProps> = ({
           <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
             <span>Conservative (25th Percentile)</span>
             <ProvenanceButton
-              provenance={revenue.provenance}
+              provenance={revenue.revenueProvenance || revenue.provenance}
               onClick={onOpenProvenance}
             />
           </div>
@@ -104,8 +170,8 @@ export const RevenueCard: React.FC<RevenueCardProps> = ({
             </span>
             <span className="text-xs text-slate-500">/ yr</span>
           </div>
-          <p className="text-xs text-slate-500 mt-2">
-            P25 historical performance during slower ramp-up or lower seasonal capture.
+          <p className="text-xs text-slate-500 mt-2 font-mono">
+            25th percentile of estimated_revenue_l365d (n={revenue.revenueProvenance?.rowCount || pricing.n})
           </p>
         </div>
 
@@ -114,7 +180,7 @@ export const RevenueCard: React.FC<RevenueCardProps> = ({
           <div className="flex items-center justify-between text-xs text-teal-900 font-semibold">
             <span>Base Case (Market Median)</span>
             <ProvenanceButton
-              provenance={revenue.provenance}
+              provenance={revenue.revenueProvenance || revenue.provenance}
               onClick={onOpenProvenance}
             />
           </div>
@@ -124,9 +190,15 @@ export const RevenueCard: React.FC<RevenueCardProps> = ({
             </span>
             <span className="text-xs text-teal-800">/ yr</span>
           </div>
-          <p className="text-xs text-teal-900 mt-2">
-            Median annual revenue across comparable listings. (~{formatCurrency(Math.round(revenue.annualRevenueMedian / 12))}/mo)
-          </p>
+          <div className="mt-2 flex items-center justify-between text-xs text-teal-900">
+            <span>
+              ~{formatCurrency(Math.round(revenue.annualRevenueMedian / 12))}/mo
+            </span>
+            <ProvenanceButton
+              provenance={monthlyRevProvenance}
+              onClick={onOpenProvenance}
+            />
+          </div>
         </div>
 
         {/* High (P75) */}
@@ -134,7 +206,7 @@ export const RevenueCard: React.FC<RevenueCardProps> = ({
           <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
             <span>Outperformer (75th Percentile)</span>
             <ProvenanceButton
-              provenance={revenue.provenance}
+              provenance={revenue.revenueProvenance || revenue.provenance}
               onClick={onOpenProvenance}
             />
           </div>
@@ -144,8 +216,8 @@ export const RevenueCard: React.FC<RevenueCardProps> = ({
             </span>
             <span className="text-xs text-slate-500">/ yr</span>
           </div>
-          <p className="text-xs text-slate-500 mt-2">
-            Top 25% of comps with high review volume, professional photography, and superhost status.
+          <p className="text-xs text-slate-500 mt-2 font-mono">
+            75th percentile of estimated_revenue_l365d (n={revenue.revenueProvenance?.rowCount || pricing.n})
           </p>
         </div>
       </div>
@@ -153,21 +225,27 @@ export const RevenueCard: React.FC<RevenueCardProps> = ({
       {/* 3. Method Discipline Callout: Product of Medians vs Median Revenue */}
       <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex items-start gap-3">
         <Info className="w-5 h-5 text-teal-700 shrink-0 mt-0.5" />
-        <div className="text-xs text-slate-700 space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-semibold text-slate-900">
-              Methodological Note: Median Revenue vs Simple Check Product
-            </span>
-            <span className="bg-slate-200 text-slate-700 px-2 py-0.5 rounded font-mono text-[11px]">
-              Simple Check: {formatCurrency(revenue.simpleCheckProduct)}/yr
-            </span>
+        <div className="text-xs text-slate-700 space-y-1.5 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-slate-900">
+                Methodological Note: Median Revenue vs Simple Check Product
+              </span>
+              <span className="bg-slate-200 text-slate-700 px-2 py-0.5 rounded font-mono text-[11px]">
+                Simple Check: {formatCurrency(revenue.simpleCheckProduct)}/yr
+              </span>
+            </div>
+            <ProvenanceButton
+              provenance={revenue.simpleCheckProvenance || revenue.provenance}
+              onClick={onOpenProvenance}
+            />
           </div>
           <p className="leading-relaxed">
             Annual revenue ({formatCurrency(revenue.annualRevenueMedian)}) is computed as the{' '}
             <strong>median of actual estimated annual earnings</strong> across the comp set, not by
             multiplying median price ({formatCurrency(pricing.recommendedPrice)}) by median nights
-            ({formatNumber(revenue.bookedNightsMedian)} nights = {formatCurrency(revenue.simpleCheckProduct)}). A product
-            of medians overstates true revenue because listings charging above-median prices often book fewer nights.
+            ({formatNumber(revenue.bookedNightsMedian)} nights). {simpleRelationText} A simple product
+            distorts true earnings because listings charging above-median prices often book fewer nights.
           </p>
         </div>
       </div>
@@ -181,16 +259,22 @@ export const RevenueCard: React.FC<RevenueCardProps> = ({
             </div>
             <div>
               <h3 className="text-sm font-bold text-slate-900">
-                "What If" Scenario Planner
+                Scenario: your price × median booked nights (not the estimate)
               </h3>
               <p className="text-xs text-slate-500">
                 Adjust nightly price to test projected revenue at {formatNumber(revenue.bookedNightsMedian)} booked nights/yr
               </p>
             </div>
           </div>
-          <span className="text-xs font-semibold px-2.5 py-1 bg-amber-50 text-amber-800 border border-amber-200 rounded-lg">
-            Scenario Model
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold px-2.5 py-1 bg-amber-50 text-amber-800 border border-amber-200 rounded-lg">
+              Scenario Model
+            </span>
+            <ProvenanceButton
+              provenance={scenarioProvenance}
+              onClick={onOpenProvenance}
+            />
+          </div>
         </div>
 
         <div className="p-4 bg-slate-50 rounded-xl space-y-4">
@@ -205,20 +289,20 @@ export const RevenueCard: React.FC<RevenueCardProps> = ({
 
           <input
             type="range"
-            min={Math.max(50, Math.floor(pricing.p25 * 0.7))}
-            max={Math.ceil(pricing.topRatedP75 * 1.5)}
+            min={minSliderPrice}
+            max={maxSliderPrice}
             step="5"
             value={scenarioPrice}
             onChange={(e) => setScenarioPrice(Number(e.target.value))}
-            className="w-full accent-teal-700 cursor-pointer"
+            className="w-full accent-teal-700 cursor-pointer h-2"
           />
 
-          <div className="flex items-center justify-between text-xs text-slate-400 font-mono">
-            <span>Min: ${Math.max(50, Math.floor(pricing.p25 * 0.7))}</span>
+          <div className="flex items-center justify-between text-xs text-slate-500 font-mono">
+            <span>Min comp: ${minSliderPrice}</span>
             <span className="text-teal-800 font-semibold">
               Market Median: {formatCurrency(pricing.recommendedPrice)}
             </span>
-            <span>Max: ${Math.ceil(pricing.topRatedP75 * 1.5)}</span>
+            <span>Max comp: ${maxSliderPrice}</span>
           </div>
         </div>
 
@@ -265,46 +349,73 @@ export const RevenueCard: React.FC<RevenueCardProps> = ({
               </div>
             </div>
 
-            <div className="text-right">
-              <span className="text-xs text-slate-500 block">Nightly Break-even Price</span>
-              <span className="text-lg font-bold font-mono text-emerald-800">
-                {formatCurrency(revenue.breakEvenNightlyPrice || 0)} / night
-              </span>
+            <div className="flex items-center gap-2">
+              <div className="text-right">
+                <span className="text-xs text-slate-500 block">Nightly Break-even Price</span>
+                <span className="text-lg font-bold font-mono text-emerald-800">
+                  {revenue.bookedNightsMedian === 0
+                    ? "Break-even can't be computed"
+                    : `${formatCurrency(revenue.breakEvenNightlyPrice || 0)} / night`}
+                </span>
+              </div>
+              {revenue.breakEvenProvenance && (
+                <ProvenanceButton
+                  provenance={revenue.breakEvenProvenance}
+                  onClick={onOpenProvenance}
+                />
+              )}
             </div>
           </div>
 
-          <div className="p-3.5 bg-emerald-50/60 border border-emerald-200 rounded-xl text-xs text-emerald-900">
-            <p className="font-semibold">
-              Break-even Nightly Formula:
-            </p>
-            <p className="mt-0.5 font-mono">
-              ({formatCurrency(profile.monthlyCarryingCost)} × 12 months) ÷ {revenue.bookedNightsMedian} median booked nights = {formatCurrency(revenue.breakEvenNightlyPrice || 0)}/night.
-            </p>
-            <p className="mt-1">
-              {pricing.recommendedPrice >= (revenue.breakEvenNightlyPrice || 0) ? (
-                <span>
-                  ✓ Recommended market price ({formatCurrency(pricing.recommendedPrice)}) exceeds break-even by{' '}
-                  <strong>{formatCurrency(pricing.recommendedPrice - (revenue.breakEvenNightlyPrice || 0))}/night</strong>, delivering positive net margin.
-                </span>
-              ) : (
-                <span className="text-amber-800 font-semibold">
-                  ⚠️ Market rate ({formatCurrency(pricing.recommendedPrice)}) is below break-even. Consider targeting the Premium tier or optimizing amenities to bridge the gap.
-                </span>
-              )}
-            </p>
-          </div>
+          {revenue.bookedNightsMedian === 0 ? (
+            <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900">
+              Break-even can't be computed because median booked nights is 0.
+            </div>
+          ) : (
+            <div className="p-3.5 bg-emerald-50/60 border border-emerald-200 rounded-xl text-xs text-emerald-900">
+              <p className="font-semibold">
+                Break-even Nightly Formula:
+              </p>
+              <p className="mt-0.5 font-mono">
+                ({formatCurrency(profile.monthlyCarryingCost)} × 12 months) ÷ {revenue.bookedNightsMedian} median booked nights = {formatCurrency(revenue.breakEvenNightlyPrice || 0)}/night.
+              </p>
+              <p className="mt-1">
+                {pricing.recommendedPrice >= (revenue.breakEvenNightlyPrice || 0) ? (
+                  <span>
+                    ✓ Recommended market price ({formatCurrency(pricing.recommendedPrice)}) exceeds break-even by{' '}
+                    <strong>{formatCurrency(pricing.recommendedPrice - (revenue.breakEvenNightlyPrice || 0))}/night</strong>, delivering positive net margin.
+                  </span>
+                ) : (
+                  <span className="text-amber-800 font-semibold">
+                    ⚠️ Market rate ({formatCurrency(pricing.recommendedPrice)}) is below break-even. Consider targeting the Premium tier or optimizing amenities to bridge the gap.
+                  </span>
+                )}
+              </p>
+            </div>
+          )}
 
           {/* Months to cover chart */}
-          {revenue.monthsToCover && (
-            <div className="mt-4">
-              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-2">
-                Cumulative Revenue vs Cumulative Carrying Cost (12 Months)
-              </h4>
+          {revenue.monthsToCover && revenue.monthsToCover.length > 0 && (
+            <div className="mt-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
+                    Cumulative Revenue vs Carrying Cost
+                  </h4>
+                  <p className="text-[11px] text-slate-500">
+                    {coveredMonth ? `Costs covered by month ${coveredMonth}` : 'Costs not fully covered within 12 months'}
+                  </p>
+                </div>
+                <span className="text-[11px] font-mono text-slate-500">
+                  n = {pricing.n} comps
+                </span>
+              </div>
+
               <div className="h-60 w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart
                     data={revenue.monthsToCover}
-                    margin={{ top: 10, right: 20, left: 0, bottom: 10 }}
+                    margin={{ top: 10, right: 20, left: 10, bottom: 20 }}
                   >
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
                     <XAxis
@@ -312,17 +423,19 @@ export const RevenueCard: React.FC<RevenueCardProps> = ({
                       tickFormatter={(m) => `Mo ${m}`}
                       tick={{ fontSize: 11, fill: '#64748B' }}
                       axisLine={{ stroke: '#CBD5E1' }}
+                      label={{ value: 'Month', position: 'insideBottom', offset: -12, fontSize: 11, fill: '#64748B' }}
                     />
                     <YAxis
-                      tickFormatter={(val) => `$${Math.round(val / 1000)}k`}
+                      tickFormatter={(val) => (val === 0 ? '$0' : `$${Math.round(val / 1000)}k`)}
                       tick={{ fontSize: 11, fill: '#64748B' }}
                       axisLine={{ stroke: '#CBD5E1' }}
+                      label={{ value: 'Cumulative Amount ($)', angle: -90, position: 'insideLeft', offset: -5, fontSize: 11, fill: '#64748B' }}
                     />
                     <Tooltip
                       formatter={(val: any) => formatCurrency(Number(val))}
                       labelFormatter={(label) => `Month ${label}`}
                     />
-                    <Legend wrapperStyle={{ fontSize: 12 }} />
+                    <Legend wrapperStyle={{ fontSize: 12, paddingTop: 10 }} />
                     <Line
                       type="monotone"
                       dataKey="cumulativeRev"

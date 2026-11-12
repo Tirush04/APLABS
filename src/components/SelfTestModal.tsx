@@ -1,9 +1,10 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect, useRef } from 'react';
 import { useData } from '../context/DataContext';
 import { filterCompsWithWidening, computePricingTiers, computeRevenueMetrics } from '../utils/engine';
-import { percentileInc, parsePrice, median } from '../utils/math';
+import { percentileInc, parsePrice } from '../utils/math';
 import { PropertyProfile } from '../types';
-import { CheckCircle2, XCircle, X, ShieldAlert, Sparkles, Terminal } from 'lucide-react';
+import { enforceNumberGuard } from '../utils/numberGuard';
+import { CheckCircle2, XCircle, X, Terminal } from 'lucide-react';
 
 interface SelfTestModalProps {
   isOpen: boolean;
@@ -12,15 +13,34 @@ interface SelfTestModalProps {
 
 export const SelfTestModal: React.FC<SelfTestModalProps> = ({ isOpen, onClose }) => {
   const { listings } = useData();
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    setTimeout(() => {
+      closeButtonRef.current?.focus();
+    }, 0);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [isOpen, onClose]);
 
   const testResults = useMemo(() => {
     // 1. Math unit test: percentileInc on known array
     const testArray = [15, 20, 35, 40, 50]; // n = 5
-    // k = p * (5 - 1) = 4p
-    // p=0.25 -> k=1 -> 20
-    // p=0.5 -> k=2 -> 35
-    // p=0.75 -> k=3 -> 40
-    // p=0.4 -> k=1.6 -> 20 + 0.6*(35-20) = 29
     const mathP25 = percentileInc(testArray, 0.25);
     const mathMedian = percentileInc(testArray, 0.5);
     const mathP75 = percentileInc(testArray, 0.75);
@@ -61,16 +81,41 @@ export const SelfTestModal: React.FC<SelfTestModalProps> = ({ isOpen, onClose })
     const pricing = computePricingTiers(filterResult.comps, filterResult.provenance);
     const revenue = computeRevenueMetrics(filterResult.comps, pricing, sampleProfile, filterResult.provenance);
 
-    // Expected target benchmarks:
-    // n = 151
-    // P25 = 158.03
-    // P40 = 189.50
-    // median = 208.67
-    // P75 = 246.69
-    // top-rated n = 106
-    // top-rated P75 = 260.39
-    // occupancy median = 162
-    // revenue median = 29760
+    // Number Guard benchmark context
+    const sampleContextJson = {
+      property: {
+        neighbourhood: sampleProfile.neighbourhood,
+        property_style: sampleProfile.propertyType,
+        bedrooms: sampleProfile.bedrooms,
+        bathrooms: sampleProfile.bathrooms,
+        accommodates_min: sampleProfile.accommodatesMin,
+        accommodates_max: sampleProfile.accommodatesMax,
+      },
+      pricing: {
+        launch_tier_p40: Number(pricing.p40.toFixed(2)),
+        market_tier_median: Number(pricing.median.toFixed(2)),
+        premium_tier_p75_top_rated: Number(pricing.topRatedP75.toFixed(2)),
+        typical_range_p25: Number(pricing.p25.toFixed(2)),
+        typical_range_p75: Number(pricing.p75.toFixed(2)),
+        comparable_count_n: pricing.n,
+        top_rated_count_n: pricing.topRatedN,
+      },
+      revenue_and_occupancy: {
+        booked_nights_median: revenue.bookedNightsMedian,
+        annual_revenue_median: revenue.annualRevenueMedian,
+      },
+      audit: {
+        scrape_year: 2026,
+      },
+    };
+
+    // 6 Number Guard tests
+    const guardTest1 = enforceNumberGuard('$100 licence fee', sampleContextJson);
+    const guardTest2 = enforceNumberGuard('20% higher in spring', sampleContextJson);
+    const guardTest3 = enforceNumberGuard('24 listings', sampleContextJson);
+    const guardTest4 = enforceNumberGuard('$208.67', sampleContextJson);
+    const guardTest5 = enforceNumberGuard('$29.8k', sampleContextJson);
+    const guardTest6 = enforceNumberGuard('151 similar listings', sampleContextJson);
 
     const checks = [
       {
@@ -139,6 +184,43 @@ export const SelfTestModal: React.FC<SelfTestModalProps> = ({ isOpen, onClose })
         actual: `${revenue.annualRevenueMedian}`,
         pass: revenue.annualRevenueMedian === 29760,
       },
+      // Number Guard checks
+      {
+        name: 'Guard Redact: "$100 licence fee"',
+        expected: 'redacted ([not in data])',
+        actual: guardTest1.sanitizedText.includes('[not in data]') ? 'redacted' : 'unredacted',
+        pass: guardTest1.sanitizedText.includes('[not in data]'),
+      },
+      {
+        name: 'Guard Redact: "20% higher in spring"',
+        expected: 'redacted ([not in data])',
+        actual: guardTest2.sanitizedText.includes('[not in data]') ? 'redacted' : 'unredacted',
+        pass: guardTest2.sanitizedText.includes('[not in data]'),
+      },
+      {
+        name: 'Guard Redact: "24 listings"',
+        expected: 'redacted ([not in data])',
+        actual: guardTest3.sanitizedText.includes('[not in data]') ? 'redacted' : 'unredacted',
+        pass: guardTest3.sanitizedText.includes('[not in data]'),
+      },
+      {
+        name: 'Guard Kept: "$208.67"',
+        expected: '$208.67 (kept)',
+        actual: guardTest4.sanitizedText,
+        pass: !guardTest4.sanitizedText.includes('[not in data]') && guardTest4.sanitizedText.includes('208.67'),
+      },
+      {
+        name: 'Guard Kept: "$29.8k"',
+        expected: '$29.8k (kept)',
+        actual: guardTest5.sanitizedText,
+        pass: !guardTest5.sanitizedText.includes('[not in data]') && guardTest5.sanitizedText.includes('29.8k'),
+      },
+      {
+        name: 'Guard Kept: "151 similar listings"',
+        expected: '151 similar listings (kept)',
+        actual: guardTest6.sanitizedText,
+        pass: !guardTest6.sanitizedText.includes('[not in data]') && guardTest6.sanitizedText.includes('151'),
+      },
     ];
 
     const allPassed = checks.every((c) => c.pass);
@@ -150,100 +232,112 @@ export const SelfTestModal: React.FC<SelfTestModalProps> = ({ isOpen, onClose })
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto"
+      className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60"
       onClick={onClose}
     >
-      <div
-        className="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl border border-slate-200 p-6 my-8 text-slate-800"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between pb-4 border-b border-slate-100">
-          <div className="flex items-center gap-2">
-            <div className="p-1.5 bg-slate-900 text-teal-400 rounded-lg">
-              <Terminal className="w-4 h-4" />
-            </div>
-            <div>
-              <h3 className="font-bold text-slate-900">
-                Self-Test Audit Suite (/selftest)
-              </h3>
-              <p className="text-xs text-slate-500">
-                Verifies linear interpolation percentiles and sample-case metrics against Excel
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        <div className="my-4">
-          <div
-            className={`p-3.5 rounded-xl border flex items-center justify-between text-xs font-semibold ${
-              testResults.allPassed
-                ? 'bg-teal-50 border-teal-200 text-teal-900'
-                : 'bg-rose-50 border-rose-200 text-rose-900'
-            }`}
-          >
-            <span className="flex items-center gap-1.5">
-              {testResults.allPassed ? (
-                <CheckCircle2 className="w-4 h-4 text-teal-600" />
-              ) : (
-                <XCircle className="w-4 h-4 text-rose-600" />
-              )}
-              {testResults.allPassed
-                ? 'All 11 Unit and Integration Tests Passed (100% Exact Match)'
-                : 'Some Tests Failed to Match Excel Benchmarks'}
-            </span>
-            <span className="font-mono text-[11px]">
-              {testResults.checks.filter((c) => c.pass).length} / {testResults.checks.length}
-            </span>
-          </div>
-
-          <div className="mt-4 divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden text-xs">
-            {testResults.checks.map((check, idx) => (
-              <div
-                key={idx}
-                className="p-2.5 flex items-center justify-between hover:bg-slate-50 font-mono"
-              >
-                <div className="flex items-center gap-2 max-w-sm">
-                  {check.pass ? (
-                    <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0" />
-                  ) : (
-                    <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                  )}
-                  <span className="font-sans font-medium text-slate-800 truncate">
-                    {check.name}
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-4 text-right">
-                  <span className="text-slate-400 text-[11px]">
-                    exp: {check.expected}
-                  </span>
-                  <span
-                    className={`font-bold ${
-                      check.pass ? 'text-slate-900' : 'text-rose-600'
-                    }`}
-                  >
-                    {check.actual}
-                  </span>
-                </div>
+      <div className="min-h-full flex items-start justify-center p-4 sm:p-8">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="selftest-modal-title"
+          className="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden my-auto sm:my-8 text-slate-800"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Sticky Action Bar */}
+          <div className="sticky top-0 z-10 bg-white px-6 py-4 border-b border-slate-100 flex items-start justify-between">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 bg-slate-900 text-teal-400 rounded-lg">
+                <Terminal className="w-4 h-4" />
               </div>
-            ))}
+              <div>
+                <h3 id="selftest-modal-title" className="font-bold text-slate-900">
+                  Self-Test Audit Suite (/selftest)
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Verifies linear interpolation percentiles, Excel benchmarks, and Number Guard audits
+                </p>
+              </div>
+            </div>
+            <button
+              ref={closeButtonRef}
+              type="button"
+              onClick={onClose}
+              className="px-2.5 py-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors text-xs font-semibold flex items-center gap-1.5 min-h-[44px]"
+              aria-label="Close"
+            >
+              <X className="w-4 h-4" />
+              <span>Close</span>
+            </button>
           </div>
-        </div>
 
-        <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-          <span>Excel PERCENTILE.INC linear interpolation verified.</span>
-          <button
-            onClick={onClose}
-            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-lg transition-colors"
-          >
-            Close
-          </button>
+          <div className="p-6">
+            <div
+              className={`p-3.5 rounded-xl border flex items-center justify-between text-xs font-semibold ${
+                testResults.allPassed
+                  ? 'bg-teal-50 border-teal-200 text-teal-900'
+                  : 'bg-rose-50 border-rose-200 text-rose-900'
+              }`}
+            >
+              <span className="flex items-center gap-1.5">
+                {testResults.allPassed ? (
+                  <CheckCircle2 className="w-4 h-4 text-teal-600" />
+                ) : (
+                  <XCircle className="w-4 h-4 text-rose-600" />
+                )}
+                {testResults.allPassed
+                  ? `All ${testResults.checks.length} Tests Passed (100% Exact Match)`
+                  : 'Some Tests Failed to Match Benchmarks'}
+              </span>
+              <span className="font-mono text-[11px]">
+                {testResults.checks.filter((c) => c.pass).length} / {testResults.checks.length}
+              </span>
+            </div>
+
+            <div className="mt-4 divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden text-xs max-h-[420px] overflow-y-auto">
+              {testResults.checks.map((check, idx) => (
+                <div
+                  key={idx}
+                  className="p-2.5 flex items-center justify-between hover:bg-slate-50 font-mono"
+                >
+                  <div className="flex items-center gap-2 max-w-sm">
+                    {check.pass ? (
+                      <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0" />
+                    ) : (
+                      <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                    )}
+                    <span className="font-sans font-medium text-slate-800 truncate">
+                      {check.name}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-4 text-right">
+                    <span className="text-slate-400 text-[11px]">
+                      exp: {check.expected}
+                    </span>
+                    <span
+                      className={`font-bold ${
+                        check.pass ? 'text-slate-900' : 'text-rose-600'
+                      }`}
+                    >
+                      {check.actual}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Bottom Close Button */}
+            <div className="mt-6 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+              <span>Excel PERCENTILE.INC and Number Guard verified.</span>
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-lg transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

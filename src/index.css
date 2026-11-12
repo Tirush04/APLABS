@@ -12,16 +12,48 @@
   }
 }
 
+.print-only {
+  display: none;
+}
+
 @media print {
+  body {
+    background: white !important;
+    color: #0f172a !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  /* Hide everything except Client Brief modal printable area */
   .no-print {
     display: none !important;
   }
+
   .print-only {
-    display: block !important;
+    display: revert !important;
   }
-  body {
-    background: white !important;
-    color: black !important;
+
+  .printable-wrapper {
+    position: static !important;
+    overflow: visible !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .printable-card {
+    position: static !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .break-inside-avoid, .printable-section {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
   }
 }
 

@@ -1,14 +1,19 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import L from 'leaflet';
-import { NeighbourhoodStats } from '../types';
+import { NeighbourhoodStats, PropertyProfile, Provenance } from '../types';
 import { formatCurrency, formatPercent } from '../utils/math';
-import { MapPin, Layers, X, Plus, Check, BarChart2 } from 'lucide-react';
+import { ProvenanceButton } from './ProvenanceModal';
+import { MapPin, Layers, X, Plus, BarChart2 } from 'lucide-react';
 
 interface NeighbourhoodExplorerProps {
   geoJson: any | null;
   neighbourhoodStats: Record<string, NeighbourhoodStats>;
   currentNeighbourhood: string;
+  profile: PropertyProfile;
+  comparedNeighbourhoods: string[];
+  onToggleCompare: (neighbourhood: string) => void;
   onSelectNeighbourhood: (neighbourhood: string) => void;
+  onOpenProvenance: (p: Provenance) => void;
   isMapAvailable: boolean;
 }
 
@@ -16,19 +21,16 @@ export const NeighbourhoodExplorer: React.FC<NeighbourhoodExplorerProps> = ({
   geoJson,
   neighbourhoodStats,
   currentNeighbourhood,
+  profile,
+  comparedNeighbourhoods,
+  onToggleCompare,
   onSelectNeighbourhood,
+  onOpenProvenance,
   isMapAvailable,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const geoJsonLayerRef = useRef<L.GeoJSON | null>(null);
-
-  // Side-by-side comparison (up to 3 neighbourhoods)
-  const [comparedNeighbourhoods, setComparedNeighbourhoods] = useState<string[]>([
-    currentNeighbourhood || 'Capitol Hill, Lincoln Park',
-    'Dupont Circle, Connecticut Avenue/K Street',
-    'Union Station, Stanton Park, Kingman Park',
-  ]);
 
   const [activeTab, setActiveTab] = useState<'map' | 'ranked'>('map');
 
@@ -39,26 +41,46 @@ export const NeighbourhoodExplorer: React.FC<NeighbourhoodExplorerProps> = ({
     );
   }, [neighbourhoodStats]);
 
-  // Color scale for choropleth map
-  const getColor = (price: number) => {
-    if (price <= 0) return '#E2E8F0';
-    if (price < 140) return '#CCFBF1';
-    if (price < 170) return '#99F6E4';
-    if (price < 200) return '#5EEAD4';
-    if (price < 230) return '#14B8A6';
-    if (price < 260) return '#0F766E';
-    return '#115E59';
-  };
+  // Compute 5 data quintiles from valid positive medians
+  const quintiles = useMemo(() => {
+    const validPrices = rankedNeighbourhoods
+      .map((n) => n.medianPrice1BedEntire)
+      .filter((p) => p > 0)
+      .sort((a, b) => a - b);
 
-  useEffect(() => {
-    if (!isMapAvailable || !geoJson || !mapContainerRef.current) return;
-
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.remove();
-      mapInstanceRef.current = null;
+    if (validPrices.length === 0) {
+      return [120, 160, 200, 240, 280];
     }
 
-    // DC coordinates roughly: [38.9072, -77.0369]
+    const q = (p: number) => {
+      const idx = Math.min(
+        validPrices.length - 1,
+        Math.max(0, Math.floor(p * (validPrices.length - 1)))
+      );
+      return Math.round(validPrices[idx]);
+    };
+
+    return [q(0.2), q(0.4), q(0.6), q(0.8), q(1.0)];
+  }, [rankedNeighbourhoods]);
+
+  // Color scale for choropleth map using quintiles
+  const getColor = useCallback((price: number) => {
+    if (price <= 0) return '#E2E8F0'; // grey: no listings
+    if (price <= quintiles[0]) return '#CCFBF1';
+    if (price <= quintiles[1]) return '#99F6E4';
+    if (price <= quintiles[2]) return '#5EEAD4';
+    if (price <= quintiles[3]) return '#14B8A6';
+    if (price <= quintiles[4]) return '#0F766E';
+    return '#115E59';
+  }, [quintiles]);
+
+  const bedLabel = profile.bedrooms === 0 ? 'Studio' : `${profile.bedrooms}-bed`;
+  const legendTitle = `Median price, ${bedLabel} ${profile.propertyType}, sleeps ${profile.accommodatesMin}–${profile.accommodatesMax}`;
+
+  // Initialize Map Once
+  useEffect(() => {
+    if (!isMapAvailable || !mapContainerRef.current || mapInstanceRef.current) return;
+
     const map = L.map(mapContainerRef.current, {
       center: [38.9072, -77.02],
       zoom: 11.5,
@@ -68,10 +90,28 @@ export const NeighbourhoodExplorer: React.FC<NeighbourhoodExplorerProps> = ({
       attributionControl: false,
     });
 
-    // Clean neutral basemap tiles
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
       maxZoom: 19,
     }).addTo(map);
+
+    mapInstanceRef.current = map;
+
+    return () => {
+      map.remove();
+      mapInstanceRef.current = null;
+      geoJsonLayerRef.current = null;
+    };
+  }, [isMapAvailable]);
+
+  // Handle GeoJSON Layer & Updates without recreating the map
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !geoJson) return;
+
+    if (geoJsonLayerRef.current) {
+      map.removeLayer(geoJsonLayerRef.current);
+      geoJsonLayerRef.current = null;
+    }
 
     const geoLayer = L.geoJSON(geoJson, {
       style: (feature) => {
@@ -87,7 +127,7 @@ export const NeighbourhoodExplorer: React.FC<NeighbourhoodExplorerProps> = ({
           opacity: 1,
           color: isSelected ? '#0F766E' : '#64748B',
           dashArray: isSelected ? '' : '2',
-          fillOpacity: isSelected ? 0.85 : 0.65,
+          fillOpacity: isSelected ? 0.9 : 0.65,
         };
       },
       onEachFeature: (feature, layer) => {
@@ -101,16 +141,16 @@ export const NeighbourhoodExplorer: React.FC<NeighbourhoodExplorerProps> = ({
           <div style="font-family: inherit; font-size: 11px; padding: 2px;">
             <p style="font-weight: 700; color: #0F172A; margin: 0 0 4px 0;">${hoodName}</p>
             <p style="margin: 0; color: #0F766E; font-weight: 600;">
-              Median 1-Bed Price: ${stat?.medianPrice1BedEntire ? formatCurrency(stat.medianPrice1BedEntire) : 'N/A'}/nt
+              Median Rate: ${stat?.medianPrice1BedEntire ? formatCurrency(stat.medianPrice1BedEntire) : 'N/A'}/nt
             </p>
             <p style="margin: 2px 0 0 0; color: #475569;">
-              Active 1-Bed Comps: <strong>${stat?.listingCount1BedEntire || 0}</strong> (Total: ${stat?.totalListings || 0})
+              Active Comps: <strong>${stat?.listingCount1BedEntire || 0}</strong> (Total: ${stat?.totalListings || 0})
             </p>
             <p style="margin: 2px 0 0 0; color: #475569;">
-              Licensed Listings: <strong>${formatPercent(stat?.licenseShare || 0)}</strong>
+              Licensed: <strong>${formatPercent(stat?.licenseShare || 0)}</strong>
             </p>
             <p style="margin: 4px 0 0 0; color: #0F766E; font-size: 10px; font-weight: 600;">
-              👉 Click to load into Property Profile
+              👉 Click to select as Property Profile
             </p>
           </div>
         `;
@@ -124,16 +164,13 @@ export const NeighbourhoodExplorer: React.FC<NeighbourhoodExplorerProps> = ({
         layer.on({
           click: () => {
             onSelectNeighbourhood(hoodName);
-            if (!comparedNeighbourhoods.includes(hoodName)) {
-              setComparedNeighbourhoods((prev) => [hoodName, prev[0], prev[1]].slice(0, 3));
-            }
           },
           mouseover: (e) => {
             const l = e.target;
             l.setStyle({
               weight: 3,
               color: '#0F766E',
-              fillOpacity: 0.85,
+              fillOpacity: 0.9,
             });
           },
           mouseout: (e) => {
@@ -144,23 +181,18 @@ export const NeighbourhoodExplorer: React.FC<NeighbourhoodExplorerProps> = ({
     }).addTo(map);
 
     geoJsonLayerRef.current = geoLayer;
-    mapInstanceRef.current = map;
+  }, [geoJson, neighbourhoodStats, currentNeighbourhood, getColor, onSelectNeighbourhood]);
 
-    return () => {
-      map.remove();
-      mapInstanceRef.current = null;
-    };
-  }, [isMapAvailable, geoJson, neighbourhoodStats, currentNeighbourhood, onSelectNeighbourhood]);
-
-  const toggleCompare = (hood: string) => {
-    if (comparedNeighbourhoods.includes(hood)) {
-      if (comparedNeighbourhoods.length > 1) {
-        setComparedNeighbourhoods((prev) => prev.filter((h) => h !== hood));
-      }
-    } else {
-      setComparedNeighbourhoods((prev) => [...prev.slice(-2), hood]);
-    }
-  };
+  // Provenance builder for a neighbourhood
+  const getHoodProvenance = (stat: NeighbourhoodStats): Provenance => ({
+    metricName: `Median Rate (${bedLabel} ${profile.propertyType})`,
+    datasetFile: 'dc_listings_clean.csv',
+    filterApplied: `neighbourhood = ${stat.neighbourhood}, room_type = Entire home/apt, bedrooms = ${profile.bedrooms}`,
+    rowCount: stat.listingCount1BedEntire,
+    formula: 'median(price) across matching profile criteria',
+    listingIds: [],
+    method: 'Linear interpolation (PERCENTILE.INC p=0.50) on profile-matched neighbourhood subset',
+  });
 
   return (
     <div className="space-y-6">
@@ -174,7 +206,7 @@ export const NeighbourhoodExplorer: React.FC<NeighbourhoodExplorerProps> = ({
             DC Neighbourhood Explorer
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Compare median 1-bedroom rates, licensing rates, and listing density across all 39 DC neighbourhoods.
+            Compare median {bedLabel} rates, licensing rates, and listing density across DC neighbourhoods.
           </p>
         </div>
 
@@ -184,7 +216,7 @@ export const NeighbourhoodExplorer: React.FC<NeighbourhoodExplorerProps> = ({
             type="button"
             onClick={() => setActiveTab('map')}
             disabled={!isMapAvailable}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 min-h-[44px] ${
               activeTab === 'map' && isMapAvailable
                 ? 'bg-white text-slate-900 shadow-xs'
                 : 'text-slate-600 hover:text-slate-900 disabled:opacity-40'
@@ -196,7 +228,7 @@ export const NeighbourhoodExplorer: React.FC<NeighbourhoodExplorerProps> = ({
           <button
             type="button"
             onClick={() => setActiveTab('ranked')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 min-h-[44px] ${
               activeTab === 'ranked' || !isMapAvailable
                 ? 'bg-white text-slate-900 shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
@@ -208,29 +240,40 @@ export const NeighbourhoodExplorer: React.FC<NeighbourhoodExplorerProps> = ({
         </div>
       </div>
 
-      {/* Map or Ranked Fallback */}
+      {/* Map or Ranked View */}
       {isMapAvailable && activeTab === 'map' ? (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-          <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+          <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <MapPin className="w-4 h-4 text-teal-700" />
-              <span className="text-xs font-semibold text-slate-700">
-                Median 1-Bed Entire-Home Nightly Rate
+              <span className="text-xs font-semibold text-slate-800">
+                {legendTitle}
               </span>
             </div>
 
-            {/* Choropleth Legend */}
-            <div className="hidden sm:flex items-center gap-2 text-[10px] text-slate-500">
-              <span>&lt;$140</span>
-              <div className="flex items-center h-2.5 rounded overflow-hidden">
-                <span className="w-5 h-full bg-[#CCFBF1]" />
-                <span className="w-5 h-full bg-[#99F6E4]" />
-                <span className="w-5 h-full bg-[#5EEAD4]" />
-                <span className="w-5 h-full bg-[#14B8A6]" />
-                <span className="w-5 h-full bg-[#0F766E]" />
-                <span className="w-5 h-full bg-[#115E59]" />
+            {/* Choropleth Legend visible on mobile and desktop */}
+            <div className="flex items-center gap-2 text-[10px] text-slate-500 flex-wrap">
+              <div className="flex items-center gap-1">
+                <span className="w-3 h-3 rounded-xs bg-[#E2E8F0] border border-slate-300" />
+                <span>No listings</span>
               </div>
-              <span>&gt;$260</span>
+              <div className="flex items-center h-3 rounded overflow-hidden border border-slate-200">
+                <span className="px-1.5 h-full bg-[#CCFBF1] text-[9px] text-teal-950 flex items-center">
+                  ≤${quintiles[0]}
+                </span>
+                <span className="px-1.5 h-full bg-[#99F6E4] text-[9px] text-teal-950 flex items-center">
+                  ≤${quintiles[1]}
+                </span>
+                <span className="px-1.5 h-full bg-[#5EEAD4] text-[9px] text-teal-950 flex items-center">
+                  ≤${quintiles[2]}
+                </span>
+                <span className="px-1.5 h-full bg-[#14B8A6] text-[9px] text-white flex items-center">
+                  ≤${quintiles[3]}
+                </span>
+                <span className="px-1.5 h-full bg-[#0F766E] text-[9px] text-white flex items-center">
+                  &gt;${quintiles[3]}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -242,19 +285,19 @@ export const NeighbourhoodExplorer: React.FC<NeighbourhoodExplorerProps> = ({
 
           <div className="p-3 bg-slate-50 border-t border-slate-100 text-xs text-slate-500 flex items-center justify-between">
             <span>
-              Selected in profile: <strong className="text-slate-900">{currentNeighbourhood}</strong>
+              Active profile: <strong className="text-slate-900">{currentNeighbourhood}</strong>
             </span>
-            <span className="text-[11px]">Click any zone to switch property profile location</span>
+            <span className="text-[11px]">Click zone to select · use Benchmark section below to compare</span>
           </div>
         </div>
       ) : (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-bold text-slate-900">
-              All 39 DC Neighbourhoods Ranked by 1-Bed Price
+              Ranked Neighbourhoods ({rankedNeighbourhoods.length})
             </h3>
             <span className="text-xs text-slate-500">
-              Click "Load" to switch your Property Profile
+              Click "Select" to switch Property Profile or "+ Compare"
             </span>
           </div>
 
@@ -278,12 +321,27 @@ export const NeighbourhoodExplorer: React.FC<NeighbourhoodExplorerProps> = ({
                   </div>
                 </div>
 
-                <div className="flex items-center gap-4">
-                  <span className="font-mono font-bold text-slate-900">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono font-bold text-slate-900 mr-2">
                     {n.medianPrice1BedEntire > 0
                       ? `${formatCurrency(n.medianPrice1BedEntire)}/nt`
                       : 'N/A'}
                   </span>
+                  <ProvenanceButton
+                    provenance={getHoodProvenance(n)}
+                    onClick={onOpenProvenance}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onToggleCompare(n.neighbourhood)}
+                    className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg transition-colors border ${
+                      comparedNeighbourhoods.includes(n.neighbourhood)
+                        ? 'bg-teal-700 text-white border-teal-700'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {comparedNeighbourhoods.includes(n.neighbourhood) ? 'Comparing' : '+ Compare'}
+                  </button>
                   <button
                     type="button"
                     onClick={() => onSelectNeighbourhood(n.neighbourhood)}
@@ -298,7 +356,7 @@ export const NeighbourhoodExplorer: React.FC<NeighbourhoodExplorerProps> = ({
         </div>
       )}
 
-      {/* Side-by-side comparison (up to 3 neighbourhoods) */}
+      {/* Side-by-Side Neighbourhood Benchmark */}
       <div className="p-6 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
@@ -306,11 +364,11 @@ export const NeighbourhoodExplorer: React.FC<NeighbourhoodExplorerProps> = ({
               Side-by-Side Neighbourhood Benchmark (Up to 3)
             </h3>
             <p className="text-xs text-slate-500">
-              Compare local market fundamentals to evaluate expansion or cross-listing opportunities
+              Compare local market fundamentals for {bedLabel} {profile.propertyType} properties
             </p>
           </div>
 
-          <span className="text-xs font-mono text-slate-400">
+          <span className="text-xs font-mono text-slate-500 bg-slate-50 px-2 py-1 rounded border border-slate-200">
             {comparedNeighbourhoods.length} of 3 selected
           </span>
         </div>
@@ -339,27 +397,37 @@ export const NeighbourhoodExplorer: React.FC<NeighbourhoodExplorerProps> = ({
                       {hoodName}
                     </h4>
                   </div>
-                  {comparedNeighbourhoods.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => toggleCompare(hoodName)}
-                      className="text-slate-400 hover:text-slate-600 p-1"
-                      title="Remove from comparison"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  )}
+                  <div className="flex items-center gap-1">
+                    {stats && (
+                      <ProvenanceButton
+                        provenance={getHoodProvenance(stats)}
+                        onClick={onOpenProvenance}
+                      />
+                    )}
+                    {comparedNeighbourhoods.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => onToggleCompare(hoodName)}
+                        className="text-slate-400 hover:text-slate-600 p-1"
+                        aria-label="Remove from comparison"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="mt-4 space-y-2 text-xs">
                   <div className="flex items-center justify-between py-1 border-b border-slate-100">
-                    <span className="text-slate-500">Median 1-Bed Price:</span>
+                    <span className="text-slate-500">Median Rate:</span>
                     <span className="font-bold font-mono text-slate-900">
-                      {stats ? formatCurrency(stats.medianPrice1BedEntire) : 'N/A'}/nt
+                      {stats && stats.medianPrice1BedEntire > 0
+                        ? `${formatCurrency(stats.medianPrice1BedEntire)}/nt`
+                        : 'N/A'}
                     </span>
                   </div>
                   <div className="flex items-center justify-between py-1 border-b border-slate-100">
-                    <span className="text-slate-500">1-Bed Entire Comps:</span>
+                    <span className="text-slate-500">Similar Comps:</span>
                     <span className="font-mono text-slate-800">
                       {stats?.listingCount1BedEntire || 0} listings
                     </span>
@@ -388,7 +456,7 @@ export const NeighbourhoodExplorer: React.FC<NeighbourhoodExplorerProps> = ({
                   <button
                     type="button"
                     onClick={() => onSelectNeighbourhood(hoodName)}
-                    className="w-full mt-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-teal-700 hover:text-white rounded-lg transition-colors"
+                    className="w-full mt-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-teal-700 hover:text-white rounded-lg transition-colors min-h-[44px]"
                   >
                     Load into Property Profile
                   </button>
